@@ -1,0 +1,135 @@
+name: Full CI/CD Pipeline
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+
+  # ------------------------------
+  # 1️⃣ TEST REACT PROJECT
+  # ------------------------------
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test --if-present
+
+      - name: Upload coverage (if exists)
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage
+          if-no-files-found: ignore
+
+  # ------------------------------
+  # 2️⃣ BUILD + DEPLOY TO GITHUB PAGES (VITE)
+  # ------------------------------
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Vite App
+        run: npm run build
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload build output
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ------------------------------
+  # 3️⃣ MONITOR AFTER DEPLOY
+  # ------------------------------
+  monitor:
+    needs: deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Python dependencies
+        run: |
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run monitoring script
+        env:
+          SITE_URL: ${{ needs.deploy.outputs.page_url }}
+        run: |
+          echo "SITE_URL=${SITE_URL}" 
+          python monitor.py
+
+      - name: Upload monitoring results
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-metrics
+          path: metrics.json
+          if-no-files-found: ignore
+
+  # ------------------------------
+  # 4️⃣ LOAD TEST (k6)
+  # ------------------------------
+  loadtest:
+    needs: deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install k6
+        run: sudo snap install k6
+
+      - name: Run Load Test
+        env:
+          SITE_URL: ${{ needs.deploy.outputs.page_url }}
+        run: k6 run loadtest.js
+
+      - name: Upload loadtest results
+        uses: actions/upload-artifact@v4
+        with:
+          name: loadtest-results
+          path: .
